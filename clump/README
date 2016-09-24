@@ -1,0 +1,6 @@
+				CLUMP, or
+		Collection Library Utilising Memory Pools
+
+CLUMP is a C library which provides simple data structures, such as linked
+lists, hash tables, and red-black trees. It is freely available under the
+LGPL (see COPYING file for details).

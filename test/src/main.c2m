@@ -1,0 +1,4 @@
+main(list_t args) {
+	io.print("Testing...")
+	exit
+}
