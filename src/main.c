@@ -86,7 +86,7 @@ uint32_t c2m_count(int32_t* i, const char* string, char what) {
 
 static inline
 void c2m_read(int32_t* i, const char* string, char* dest, uint32_t len) {
-	memcpy(dest, &string[*i], len);
+	memcpy(dest, &string[*i], len), dest[len] = 0;
 	*i += len;
 }
 
@@ -108,15 +108,15 @@ uint8_t c2m_declare_var(int32_t* i, const char* string, char** dest) {
 		*dest = malloc(len + 1);
 		c2m_read(i, string, *dest, len);
 		c2m_expect(i, string, "\"\n");
-	}else if(c2m_expect(i, string, "true") == 0) {
+	}else if(c2m_expect(i, string, "TRUE") == 0) {
 		// Byte declaration: 1
-		*dest = malloc(4 + 1);
-		memcpy(*dest, "true", 4);
+		*dest = malloc(2);
+		(*dest)[0] = '1', (*dest)[1] = 0;
 		c2m_expect(i, string, "\"\n");
-	}else if(c2m_expect(i, string, "false") == 0) {
+	}else if(c2m_expect(i, string, "FALSE") == 0) {
 		// Byte declaration: 0
-		*dest = malloc(5 + 1);
-		memcpy(*dest, "false", 5);
+		*dest = malloc(2);
+		(*dest)[0] = '0', (*dest)[1] = 0;
 		c2m_expect(i, string, "\"\n");
 	}else{
 		printf("not proper at all %s\n", &string[*i]);
