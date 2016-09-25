@@ -57,7 +57,6 @@ typedef struct{
 	char* version;
 	char* creator;
 	char* library;
-	struct cl_array* includes;
 	struct cl_array* main;
 	struct cl_array* functions;
 	struct cl_array* libfuncs;
@@ -68,7 +67,7 @@ typedef struct{
 		uint8_t stdlib;
 		uint8_t stdio;
 		uint8_t clump;
-		uint8_t sdl_file_thread_timer;
+		uint8_t sdl;
 		uint8_t sdl_window;
 		uint8_t sdl_audio;
 	}libreq;
@@ -321,27 +320,37 @@ c2m_process_var(int32_t* i, const char* string, struct cl_array* a) {
 	return 1;
 }
 
-void c2m_import(c2m_t* c2m, int32_t* i, const char* string, const char* mod) {
-	if(c2m->in_func) {
-		c2m_infunc(c2m, i, string, c2m->libfuncs);
-	}else if(c2m_expect(i, string, "#include <") == 0) {
-		uint32_t len = c2m_count(i, string, '>');
-		if(len == 0) c2m_abort("closing '>' is missing");
-		char header_file[len + 1];
-
-		c2m_read(i, string, header_file, len), header_file[len] = '\0';
-		c2m_expect(i, string, ">\n");
-
-		c2m_string_append(c2m->includes, "#include <");
-		c2m_string_append(c2m->includes, header_file);
-		c2m_string_append(c2m->includes, ">\n");
+static void
+c2m_import(c2m_t* c2m, int32_t* i, const char* string, const char* mod,
+	const char* function)
+{
+	if(c2m_expect(i, string, "import stdio") == 0) {
+		c2m->libreq.stdio = 1;
+	}else if(c2m_expect(i, string, "import stdlib") == 0) {
+		c2m->libreq.stdlib = 1;
+	}else if(c2m_expect(i, string, "import clump") == 0) {
+		c2m->libreq.clump = 1;
+	}else if(c2m_expect(i, string, "import sdl") == 0) {
+		c2m->libreq.sdl = 1;
+	}else if(c2m_expect(i, string, "import sdl_window") == 0) {
+		c2m->libreq.sdl_window = 1;
+	}else if(c2m_expect(i, string, "import sdl_audio") == 0) {
+		c2m->libreq.sdl_audio = 1;
 	}else if(c2m_expect(i, string, "\n") == 0) {
 	}else{
 		uint32_t len = c2m_count(i, string, '(');
-		if(len == 0) c2m_abort("opening parenthesis missing");
+		if(len == 0) {
+			printf("ERROR @: %s", &(string[*i]));
+			c2m_abort("opening parenthesis missing");
+		}
 		char func_name[len + 1];
 
 		c2m_read(i, string, func_name, len), func_name[len] = '\0';
+		if(strcmp(func_name, function)) {
+			while(string[*i] != '}') *i = *i + 1;
+			c2m_expect(i, string, "}\n");
+			return;
+		}
 		printf("Open function %s\n", func_name);
 		c2m_expect(i, string, "(");
 		c2m_skip_whitespace(i, string);
@@ -353,16 +362,21 @@ void c2m_import(c2m_t* c2m, int32_t* i, const char* string, const char* mod) {
 		c2m_expect(i, string, ")");
 		c2m_skip_whitespace(i, string);
 		c2m_expect(i, string, "{\n");
-		c2m->in_func = 1;
 
-		c2m_string_append(c2m->includes, "void ");
-		c2m_string_append(c2m->includes, mod);
-		c2m_string_append(c2m->includes, "__");
-		c2m_string_append(c2m->includes, func_name);
-		c2m_string_append(c2m->includes, "(");
+		c2m_string_append(c2m->libfuncs, "static void ");
+		c2m_string_append(c2m->libfuncs, mod);
+		c2m_string_append(c2m->libfuncs, "__");
+		c2m_string_append(c2m->libfuncs, func_name);
+		c2m_string_append(c2m->libfuncs, "(");
 
 		int j = 0;
-		while(c2m_process_var(&j, parameters, c2m->includes));
+		while(c2m_process_var(&j, parameters, c2m->libfuncs));
+
+//		printf("AFTER VAR: %s", &(string[*i]));
+		c2m->in_func = 1;
+		while(*i < strlen(string) && c2m->in_func) {
+			c2m_infunc(c2m, i, string, c2m->libfuncs);
+		}
 	}
 }
 
@@ -426,7 +440,6 @@ void c2m_compile(c2m_t* c2m) {
 	SDL_RWread(input, filecontents, size, 1);
 	SDL_RWclose(input);
 
-	c2m->includes = c2m_string_create(NULL);
 	c2m->functions = c2m_string_create(NULL);
 	c2m->libfuncs = c2m_string_create(NULL);
 	c2m->main = c2m_string_create(NULL);
@@ -434,6 +447,12 @@ void c2m_compile(c2m_t* c2m) {
 	c2m->in_func = 0;
 	c2m->return_success = 1;
 	c2m->imports = NULL;
+	c2m->libreq.stdio = 0;
+	c2m->libreq.stdlib = 0;
+	c2m->libreq.clump = 0;
+	c2m->libreq.sdl = 0;
+	c2m->libreq.sdl_window = 0;
+	c2m->libreq.sdl_audio = 0;
 	for(int32_t i = 0; i < size;) {
 		c2m_loop(c2m, &i, filecontents);
 	}
@@ -457,11 +476,18 @@ void c2m_compile(c2m_t* c2m) {
 		SDL_RWread(input, libcontents, size, 1);
 		SDL_RWclose(input);
 		for(int32_t i = 0; i < size;) {
-			c2m_import(c2m, &i, libcontents, current->module);
+			c2m_import(c2m, &i, libcontents, current->module, current->function);
 		}
 		current = current->next;
 	}
-	if(c2m->includes->n_items) c2m_output(output, c2m->includes->store);
+	// Include requirements from C
+	if(c2m->libreq.stdio) c2m_output(output, "#include <stdio.h>\n");
+	if(c2m->libreq.stdlib) c2m_output(output, "#include <stdlib.h>\n");
+	if(c2m->libreq.clump) c2m_output(output, "#include <c2m_clump.c>\n");
+	if(c2m->libreq.sdl) c2m_output(output, "#include <c2m_sdl.c>\n");
+	if(c2m->libreq.sdl_window) c2m_output(output, "#include <c2m_window.c>\n");
+	if(c2m->libreq.sdl_audio) c2m_output(output, "#include <c2m_audio.c>\n");
+	// Functions
 	if(c2m->functions->n_items) c2m_output(output, c2m->functions->store);
 	if(c2m->libfuncs->n_items) c2m_output(output, c2m->libfuncs->store);
 	c2m_output(output, "int main(int argc, char* argv[]){\n");

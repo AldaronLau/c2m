@@ -1,4 +1,4 @@
 main( list_t args ) {
-	io.print("Testing...\n")
+	io.println("Testing...")
 	exit
 }

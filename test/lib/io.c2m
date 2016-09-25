@@ -1,5 +1,9 @@
-#include <stdio.h>
+import stdio
 
 print( string_t string ) {
 	fputs(string, stdout);
+}
+
+println( string_t string ) {
+	puts(string);
 }

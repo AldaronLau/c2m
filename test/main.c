@@ -1,7 +1,7 @@
 #include <stdio.h>
-void io__print(char*  string ){
-fputs(string, stdout);
+static void io__println(char*  string ){
+puts(string);
 }
 int main(int argc, char* argv[]){
-io__print("Testing...\n");
+io__println("Testing...");
 return 0; }
