@@ -40,11 +40,39 @@
 #include "../SDL2-c2m/src/stdlib/SDL_malloc.c"
 #include "../SDL2-c2m/src/file/SDL_rwops.c"
 
+// String support ( includes Clump Array )
+#include "c2m_string.c"
+// Clump List
+//#include "../clump/src/pool.c"
+//#include "../clump/src/list.c"
+
+typedef struct{
+	char* module; // 24 + null byte
+	char* function;
+	void* next;
+}c2m_func_t;
+
 typedef struct{
 	char* name;
 	char* version;
 	char* creator;
 	char* library;
+	struct cl_array* includes;
+	struct cl_array* main;
+	struct cl_array* functions;
+	struct cl_array* libfuncs;
+	uint8_t in_main;
+	uint8_t in_func;
+	uint8_t return_success;
+	struct{
+		uint8_t stdlib;
+		uint8_t stdio;
+		uint8_t clump;
+		uint8_t sdl_file_thread_timer;
+		uint8_t sdl_window;
+		uint8_t sdl_audio;
+	}libreq;
+	c2m_func_t* imports;
 }c2m_t;
 
 void c2m_skip_whitespace(int32_t* i, const char* string) {
@@ -68,7 +96,7 @@ uint8_t c2m_expect(int32_t* i, const char* string, char* what) {
 }
 
 void c2m_abort(const char* reason) {
-	printf("Aborting because: \"%s\"....\n", reason);
+	printf("Aborting because: \"%s\"\n", reason);
 	exit(1);
 }
 
@@ -78,9 +106,11 @@ uint32_t c2m_count(int32_t* i, const char* string, char what) {
 	for(int j = *i; j < strlen(string); j++) {
 		if(string[j] == what)
 			return j - *i;
+		if(string[j] == '\n' || string[j] == '\0')
+			return 0;
 	}
-	printf("Expected character \"%c\":", what);
-	c2m_abort("Character not found");
+//	printf("Expected character \"%c\":", what);
+//	printf("%s\n", &string[*i]);
 	return 0;
 }
 
@@ -105,6 +135,7 @@ uint8_t c2m_declare_var(int32_t* i, const char* string, char** dest) {
 	if(c2m_expect(i, string, "\"") == 0) {
 		// String Declaration
 		uint32_t len = c2m_count(i, string, '\"');
+		if(len == 0) c2m_abort("closing double quote is missing");
 		*dest = malloc(len + 1);
 		c2m_read(i, string, *dest, len);
 		c2m_expect(i, string, "\"\n");
@@ -126,7 +157,7 @@ uint8_t c2m_declare_var(int32_t* i, const char* string, char** dest) {
 	return 0;
 }
 
-void get_config(c2m_t* c2m) {
+void c2m_gconfig(c2m_t* c2m) {
 	SDL_RWops *file;
 
 	if((file = SDL_RWFromFile("c2m.config", "rb")) == NULL) {
@@ -158,15 +189,296 @@ void get_config(c2m_t* c2m) {
 			break;
 		}
 	}
-	printf("name = '%s'\n", c2m->name);
-	printf("version = '%s'\n", c2m->version);
-	printf("creator = '%s'\n", c2m->creator);
-	printf("library = '%s'\n", c2m->library);
+//	printf("name = '%s'\n", c2m->name);
+//	printf("version = '%s'\n", c2m->version);
+//	printf("creator = '%s'\n", c2m->creator);
+//	printf("library = '%s'\n", c2m->library);
+}
+
+static inline void c2m_output(SDL_RWops *output, const char* string) {
+	if(SDL_RWwrite(output, string, 1, strlen(string)) != strlen(string)) {
+		c2m_abort("Failed to write");
+	}
+}
+
+void c2m_modular_func_call(c2m_t* c2m, int32_t* i, const char* string,
+	struct cl_array* mof)
+{
+	c2m_skip_whitespace(i, string);
+	uint32_t len = c2m_count(i, string, '.');
+	if(len == 0) {
+		printf("Where = %s", &string[*i]);
+		c2m_abort("no module function separator");
+	}
+	char* module_name = malloc(len);
+	c2m_read(i, string, module_name, len);
+	c2m_expect(i, string, ".");
+	uint32_t len2 = c2m_count(i, string, '(');
+	if(len == 0) c2m_abort("need an opening parenthesis");
+	char* function_name = malloc(len2);
+	c2m_read(i, string, function_name, len2);
+//	c2m_expect(i, string, "\n");
+	fputs("Import module: ", stdout);
+	fputs(module_name, stdout);
+	fputs(" & Function: ", stdout);
+	fputs(function_name, stdout);
+	fputs("\n", stdout);
+	uint8_t found_module = 0;
+	// Search for module
+	c2m_func_t** current = &c2m->imports;
+	while(1) {
+		if(*current == NULL) {
+			*current = malloc(sizeof(c2m_func_t));
+			(*current)->module = module_name;
+			(*current)->function = function_name;
+			(*current)->next = NULL;
+			break;
+		}
+		if(strcmp((*current)->module, module_name) == 0 &&
+		   strcmp((*current)->function, function_name) == 0)
+		{
+			free(module_name);
+			free(function_name);
+			module_name = (*current)->module;
+			function_name = (*current)->function;
+			break;
+		}
+		current = (void*)&((*current)->next);
+	}
+	c2m_string_append(mof, module_name);
+	c2m_string_append(mof, "__");
+	c2m_string_append(mof, function_name);
+	c2m_string_append(mof, "(");
+	if(c2m_expect(i, string, "("))
+		c2m_abort("No opening parenthesis after function call");
+	
+	uint32_t len3 = c2m_count(i, string, ')');
+	if(len == 0) c2m_abort("No closing parenthesis for fn call");
+	char* parameter = malloc(len3);
+	c2m_read(i, string, parameter, len3);
+	c2m_string_append(mof, parameter);
+	c2m_string_append(mof, ");\n");
+	if(c2m_expect(i, string, ")\n"))
+		c2m_abort("No closing parenthesis after function call");
+}
+
+void c2m_infunc(c2m_t* c2m, int32_t* i, const char* string, struct cl_array* a){
+	c2m_skip_whitespace(i, string);
+	if(c2m_expect(i, string, "exit\n") == 0) {
+		c2m->libreq.stdlib = 1;
+		c2m_string_append(a, "exit(0);");
+	}else if(c2m_expect(i, string, "fail\n") == 0) {
+		c2m->libreq.stdlib = 1;
+		c2m_string_append(a, "exit(1);");
+	}else if(c2m_expect(i, string, "}") == 0) {
+		c2m->in_func = 0;
+		c2m_string_append(a, "}\n");
+	}else if(c2m_expect(i, string, "\n") == 0) {
+	}else{
+		// check for C function call
+		uint32_t len = c2m_count(i, string, ';');
+		char call[len + 1];
+
+		if(len == 0) {
+			// C-- function call
+			c2m_modular_func_call(c2m, i, string, a);
+			return;
+		}
+
+		c2m_read(i, string, call, len), call[len] = '\0';
+		c2m_string_append(a, call);
+		c2m_string_append(a, ";\n");
+		if(c2m_expect(i, string, ";\n")) {
+			c2m_abort("Missing newline for c function call");
+		}
+	}
+}
+
+static uint8_t
+c2m_process_var(int32_t* i, const char* string, struct cl_array* a) {
+	c2m_skip_whitespace(i, string);
+	if(c2m_expect(i, string, "string_t") == 0) {
+		uint32_t len = c2m_count(i, string, ',');
+		if(len) {
+			char par_name[len + 1];
+			
+			c2m_read(i, string, par_name, len), par_name[len] = '\0';
+			c2m_string_append(a, "char* ");
+			c2m_string_append(a, par_name);
+			c2m_string_append(a, ",");
+		}else{
+			c2m_string_append(a, "char* ");
+			c2m_string_append(a, &(string[*i]));
+			c2m_string_append(a, "){\n");
+			return 0;
+		}
+	}else{
+		fputs("Unknown Variable Type: ", stdout);
+		fputs(&string[*i], stdout);
+		fputs("\n", stdout);
+		c2m_abort("Unknown type");
+	}
+	return 1;
+}
+
+void c2m_import(c2m_t* c2m, int32_t* i, const char* string, const char* mod) {
+	if(c2m->in_func) {
+		c2m_infunc(c2m, i, string, c2m->libfuncs);
+	}else if(c2m_expect(i, string, "#include <") == 0) {
+		uint32_t len = c2m_count(i, string, '>');
+		if(len == 0) c2m_abort("closing '>' is missing");
+		char header_file[len + 1];
+
+		c2m_read(i, string, header_file, len), header_file[len] = '\0';
+		c2m_expect(i, string, ">\n");
+
+		c2m_string_append(c2m->includes, "#include <");
+		c2m_string_append(c2m->includes, header_file);
+		c2m_string_append(c2m->includes, ">\n");
+	}else if(c2m_expect(i, string, "\n") == 0) {
+	}else{
+		uint32_t len = c2m_count(i, string, '(');
+		if(len == 0) c2m_abort("opening parenthesis missing");
+		char func_name[len + 1];
+
+		c2m_read(i, string, func_name, len), func_name[len] = '\0';
+		printf("Open function %s\n", func_name);
+		c2m_expect(i, string, "(");
+		c2m_skip_whitespace(i, string);
+
+		uint32_t len2 = c2m_count(i, string, ')');
+		if(len2 == 0) c2m_abort("closing parenthesis missing");
+		char parameters[len2 + 1];
+		c2m_read(i, string, parameters, len2), parameters[len2] = '\0';
+		c2m_expect(i, string, ")");
+		c2m_skip_whitespace(i, string);
+		c2m_expect(i, string, "{\n");
+		c2m->in_func = 1;
+
+		c2m_string_append(c2m->includes, "void ");
+		c2m_string_append(c2m->includes, mod);
+		c2m_string_append(c2m->includes, "__");
+		c2m_string_append(c2m->includes, func_name);
+		c2m_string_append(c2m->includes, "(");
+
+		int j = 0;
+		while(c2m_process_var(&j, parameters, c2m->includes));
+	}
+}
+
+void c2m_loop(c2m_t* c2m, int32_t* i, const char* string) {
+	if(c2m->in_main) {
+		// Skip indentation.
+		c2m_skip_whitespace(i, string);
+		if(c2m_expect(i, string, "exit\n}") == 0) {
+			c2m->in_main = 0;
+		}else if(c2m_expect(i, string, "fail\n}") == 0) {
+			c2m->return_success = 0;
+			c2m->in_main = 0;
+		}else if(c2m_expect(i, string, "}") == 0) {
+			c2m->in_main = 0;
+		}else{
+			c2m_infunc(c2m, i, string, c2m->main);
+		}
+	}else if(c2m->in_func) {
+		c2m_infunc(c2m, i, string, c2m->functions);
+	}else if(c2m_expect(i, string, "main(") == 0) {
+		c2m_skip_whitespace(i, string);
+		if(c2m_expect(i, string, "list_t args")) {
+			c2m_abort("Expected \"list_t args\" after \"main(\"");
+		}
+		c2m_skip_whitespace(i, string);
+		if(c2m_expect(i, string, ")")) {
+			c2m_abort("Expected \")\" after \"list_t args\"");
+		}
+		c2m_skip_whitespace(i, string);
+		if(c2m_expect(i, string, "{\n")) {
+			c2m_abort("Expected \"{\\n\" after \")\"");
+		}
+		c2m->in_main = 1;
+	}else if(c2m_expect(i, string, "\n") == 0) {
+	}else{
+		c2m_skip_whitespace(i, string);
+		printf("Error: %s", &(string[*i]));
+		printf("Error: %d", string[*i]);
+		c2m_abort("Unable to process text");
+	}
+}
+
+void c2m_compile(c2m_t* c2m) {
+	fputs("Compiling ", stdout);
+	fputs(c2m->name, stdout);
+	fputs(" version ", stdout);
+	fputs(c2m->version, stdout);
+	fputs("\n", stdout);
+	SDL_RWops *output;
+	SDL_RWops *input;
+
+	if((output = SDL_RWFromFile("main.c", "w+")) == NULL) {
+		c2m_abort("couldn't create output file");
+	}
+	if((input = SDL_RWFromFile("src/main.c2m", "rb")) == NULL) {
+		c2m_abort("couldn't open input file");
+	}
+	uint64_t size = SDL_RWsize(input);
+	char filecontents[size + 1];
+
+	SDL_RWread(input, filecontents, size, 1);
+	SDL_RWclose(input);
+
+	c2m->includes = c2m_string_create(NULL);
+	c2m->functions = c2m_string_create(NULL);
+	c2m->libfuncs = c2m_string_create(NULL);
+	c2m->main = c2m_string_create(NULL);
+	c2m->in_main = 0;
+	c2m->in_func = 0;
+	c2m->return_success = 1;
+	c2m->imports = NULL;
+	for(int32_t i = 0; i < size;) {
+		c2m_loop(c2m, &i, filecontents);
+	}
+	c2m_func_t* current = c2m->imports;
+	while(1) {
+		if(current == NULL) {
+			break;
+		}
+		struct cl_array * filename = c2m_string_create(NULL);
+		c2m_string_append(filename, "lib/");
+		c2m_string_append(filename, current->module);
+		c2m_string_append(filename, ".c2m");
+		fputs("Opening ", stdout);
+		fputs(filename->store, stdout);
+		fputs("\n", stdout);
+		if((input = SDL_RWFromFile(filename->store, "rb")) == NULL) {
+			c2m_abort("couldn't open input file");
+		}
+		uint64_t size = SDL_RWsize(input);
+		char libcontents[size + 1];
+		SDL_RWread(input, libcontents, size, 1);
+		SDL_RWclose(input);
+		for(int32_t i = 0; i < size;) {
+			c2m_import(c2m, &i, libcontents, current->module);
+		}
+		current = current->next;
+	}
+	if(c2m->includes->n_items) c2m_output(output, c2m->includes->store);
+	if(c2m->functions->n_items) c2m_output(output, c2m->functions->store);
+	if(c2m->libfuncs->n_items) c2m_output(output, c2m->libfuncs->store);
+	c2m_output(output, "int main(int argc, char* argv[]){\n");
+	c2m_output(output, c2m->main->store);
+	c2m_output(output, c2m->return_success ?
+		"return 0; }\n" : "return 1; }\n");
+	SDL_RWclose(output);
+	fputs("Stage 2\n", stdout);
+	struct cl_array* clang_command = c2m_string_create(NULL);
+	c2m_string_append(clang_command, "clang -O3 main.c -o ");
+	c2m_string_append(clang_command, c2m->name);
+	system(clang_command->store);
+	fputs("Compiled\n", stdout);
 }
 
 int main(int argc, char* argv[]) {
 	c2m_t c2m;
-	printf("Compiling....\n");
-	get_config(&c2m);
-	printf("Compiled!\n");
+	c2m_gconfig(&c2m);
+	c2m_compile(&c2m);
 }
