@@ -46,6 +46,22 @@
 //#include "../clump/src/pool.c"
 //#include "../clump/src/list.c"
 
+enum {
+	TYPE_STRING,
+	TYPE_UBYTE,
+	TYPE_SBYTE,
+	TYPE_USHORT,
+	TYPE_SSHORT,
+	TYPE_UINT32,
+	TYPE_SINT32,
+	TYPE_UINT64,
+	TYPE_SINT64,
+	TYPE_FLOAT32,
+	TYPE_FLOAT64,
+	TYPE_POINTER,
+	TYPE_INTEGER,
+}c2m_type_t;
+
 typedef struct{
 	char* module; // 24 + null byte
 	char* function;
@@ -74,6 +90,11 @@ typedef struct{
 	c2m_func_t* imports;
 }c2m_t;
 
+static void c2m_abort(const char* reason) {
+	printf("Aborting because: \"%s\"\n", reason);
+	exit(1);
+}
+
 void c2m_skip_whitespace(int32_t* i, const char* string) {
 	char value;
 
@@ -85,7 +106,7 @@ void c2m_skip_whitespace(int32_t* i, const char* string) {
 }
 
 // Returns 1 if not what expected.
-uint8_t c2m_expect(int32_t* i, const char* string, char* what) {
+static uint8_t c2m_expect(int32_t* i, const char* string, char* what) {
 	if(strncmp(&string[*i], what, strlen(what))) {
 		return 1;
 	}
@@ -94,12 +115,27 @@ uint8_t c2m_expect(int32_t* i, const char* string, char* what) {
 	return 0;
 }
 
-void c2m_abort(const char* reason) {
-	printf("Aborting because: \"%s\"\n", reason);
-	exit(1);
+static uint8_t c2m_checknum(int32_t* i, const char* string, char** dest) {
+	char temp[256];
+	uint8_t howmany = 0;
+	if(string[*i] >= '0' && string[*i] <= '9') {
+		while(string[*i] >= '0' && string[*i] <= '9') {
+			temp[howmany] = string[*i];
+			howmany++;
+			if(howmany == 255) c2m_abort("Maxed out number length");
+			*i = *i + 1;
+		}
+		printf("Malloc....\n");
+		*dest = malloc(howmany + 1);
+		printf("Malloc done....\n");
+		memcpy(*dest, temp, howmany);
+		(*dest)[howmany] = 0;
+		return 0;
+	}
+	return 1;
 }
 
-uint32_t c2m_count(int32_t* i, const char* string, char what) {
+static uint32_t c2m_count(int32_t* i, const char* string, char what) {
 	int count = 0;
 
 	for(int j = *i; j < strlen(string); j++) {
@@ -119,41 +155,74 @@ void c2m_read(int32_t* i, const char* string, char* dest, uint32_t len) {
 	*i += len;
 }
 
-/*
- * Returns 1 if not a variable declaration.
-*/
-uint8_t c2m_declare_var(int32_t* i, const char* string, char** dest) {
-	// After name probably whitespace
-	c2m_skip_whitespace(i, string);
-	// Check for equals
-	if(c2m_expect(i, string, "="))
-		return 1;
+static uint8_t
+c2m_process_value(int32_t* i, const char* string, char** dest, uint8_t* type) {
 	// Probably more whitespace
 	c2m_skip_whitespace(i, string);
 	// Check for type
 	if(c2m_expect(i, string, "\"") == 0) {
+		*type = TYPE_STRING;
 		// String Declaration
 		uint32_t len = c2m_count(i, string, '\"');
 		if(len == 0) c2m_abort("closing double quote is missing");
 		*dest = malloc(len + 1);
 		c2m_read(i, string, *dest, len);
-		c2m_expect(i, string, "\"\n");
+		if(c2m_expect(i, string, "\"\n")) {
+			c2m_expect(i, string, "\"");
+			c2m_skip_whitespace(i, string);
+			if(c2m_expect(i, string, "+") == 0) {
+				uint8_t type2 = 0;
+				char* dest2 = NULL;
+				if(c2m_process_value(i, string, &dest2, &type2))
+					c2m_abort("Unrecognized value");
+				printf("Processed append onto string....");
+				printf("O: %s\n", dest2);
+				if(type2 == TYPE_INTEGER) {
+					*dest = realloc(*dest,
+						len + strlen(dest2) + 1);
+					memcpy(*dest + len, dest2, strlen(dest2));
+				}				
+			}
+		}
 	}else if(c2m_expect(i, string, "TRUE") == 0) {
+		*type = TYPE_UBYTE;
 		// Byte declaration: 1
 		*dest = malloc(2);
 		(*dest)[0] = '1', (*dest)[1] = 0;
-		c2m_expect(i, string, "\"\n");
+		c2m_expect(i, string, "\n");
 	}else if(c2m_expect(i, string, "FALSE") == 0) {
+		*type = TYPE_UBYTE;
 		// Byte declaration: 0
 		*dest = malloc(2);
 		(*dest)[0] = '0', (*dest)[1] = 0;
-		c2m_expect(i, string, "\"\n");
+		c2m_expect(i, string, "\n");
+	}else if(c2m_checknum(i, string, dest) == 0) {
+		*type = TYPE_INTEGER;
+		c2m_skip_whitespace(i, string);
+		printf("processed number %s", *dest);
+		if(string[*i] != '\0') {
+			printf("ERROR: %d %c", string[*i], string[*i]);
+			c2m_abort("Not null after integer!");
+		}
 	}else{
 		printf("not proper at all %s\n", &string[*i]);
 		// Not a proper declaration.
 		return 1;
 	}
 	return 0;
+}
+
+/*
+ * Returns 1 if not a variable declaration.
+*/
+static uint8_t c2m_declare_var(int32_t* i, const char* string, char** dest) {
+	// After name probably whitespace
+	c2m_skip_whitespace(i, string);
+	// Check for equals
+	if(c2m_expect(i, string, "=")) return 1;
+	//
+	uint8_t type = 0;
+	return c2m_process_value(i, string, dest, &type);
 }
 
 void c2m_gconfig(c2m_t* c2m) {
@@ -255,10 +324,28 @@ void c2m_modular_func_call(c2m_t* c2m, int32_t* i, const char* string,
 	if(len == 0) c2m_abort("No closing parenthesis for fn call");
 	char* parameter = malloc(len3);
 	c2m_read(i, string, parameter, len3);
-	c2m_string_append(mof, parameter);
+	uint8_t add_comma = 0;
+	
+	for(int32_t k = 0; k < len3;) {
+		char* returnv = NULL;
+		uint8_t type = 0;
+		c2m_process_value(&k, parameter, &returnv, &type);
+		if(add_comma) {
+			c2m_string_append(mof, ",");
+		}
+		if(type == TYPE_STRING) {
+			c2m_string_append(mof, "\"");
+			c2m_string_append(mof, returnv);
+			c2m_string_append(mof, "\"");
+		}else{
+			c2m_abort("Unsupported type");
+		}
+		free(returnv);
+		add_comma = 1;
+	}
 	c2m_string_append(mof, ");\n");
 	if(c2m_expect(i, string, ")\n"))
-		c2m_abort("No closing parenthesis after function call");
+		c2m_abort("Missing newline after function call");
 }
 
 void c2m_infunc(c2m_t* c2m, int32_t* i, const char* string, struct cl_array* a){

@@ -1,4 +1,3 @@
 main( list_t args ) {
-	io.println("Testing...")
-	exit
+	io.println("Hello World = " + 190)
 }
