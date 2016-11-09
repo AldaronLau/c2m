@@ -1,9 +1,9 @@
 import stdio
 
-print( string_t string ) {
+print(string_t string) {
 	fputs(string, stdout);
 }
 
-println( string_t string ) {
+println(string_t string) {
 	puts(string);
 }

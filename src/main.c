@@ -79,6 +79,8 @@ typedef struct{
 	uint8_t in_main;
 	uint8_t in_func;
 	uint8_t return_success;
+	uint32_t goto_count;
+	uint32_t block_count;
 	struct{
 		uint8_t stdlib;
 		uint8_t stdio;
@@ -350,15 +352,55 @@ void c2m_modular_func_call(c2m_t* c2m, int32_t* i, const char* string,
 
 void c2m_infunc(c2m_t* c2m, int32_t* i, const char* string, struct cl_array* a){
 	c2m_skip_whitespace(i, string);
-	if(c2m_expect(i, string, "exit\n") == 0) {
+	if(c2m_expect(i, string, "while") == 0) {
+		c2m->goto_count++;
+		uint32_t add = c2m->goto_count;
+
+		c2m_string_append(a, "C2M_WHILE");
+		while(add) {
+			char lnum = '0' + (add % 10);
+			add /= 10;
+			char dest[2];
+			dest[0] = lnum;
+			dest[1] = '\0';
+			c2m_string_append(a, dest);
+		}
+		c2m_string_append(a, ":\n");
+		c2m->block_count++;
+
+		c2m_skip_whitespace(i, string);
+		if(c2m_expect(i, string, "{\n")) {
+			c2m_abort("Missing bracket + newline for while loop.");
+		}
+	}else if(c2m_expect(i, string, "exit\n") == 0) {
 		c2m->libreq.stdlib = 1;
 		c2m_string_append(a, "exit(0);");
 	}else if(c2m_expect(i, string, "fail\n") == 0) {
 		c2m->libreq.stdlib = 1;
 		c2m_string_append(a, "exit(1);");
 	}else if(c2m_expect(i, string, "}") == 0) {
-		c2m->in_func = 0;
-		c2m_string_append(a, "}\n");
+		printf("CLOSE BRACKET;\n");
+		if(c2m->block_count) {
+			c2m_string_append(a, "goto ");
+		// TODO: Repeated code in while
+		uint32_t add = c2m->goto_count;
+
+		c2m_string_append(a, "C2M_WHILE");
+		while(add) {
+			char lnum = '0' + (add % 10);
+			add /= 10;
+			char dest[2];
+			dest[0] = lnum;
+			dest[1] = '\0';
+			c2m_string_append(a, dest);
+		}
+		//
+			c2m_string_append(a, ";\n");
+			c2m->block_count--;
+		}else{
+			c2m->in_func = 0;
+			c2m_string_append(a, "}\n");
+		}
 	}else if(c2m_expect(i, string, "\n") == 0) {
 	}else{
 		// check for C function call
@@ -477,7 +519,27 @@ void c2m_loop(c2m_t* c2m, int32_t* i, const char* string) {
 			c2m->return_success = 0;
 			c2m->in_main = 0;
 		}else if(c2m_expect(i, string, "}") == 0) {
-			c2m->in_main = 0;
+			printf("MAIN / CLOSE BRACKET;\n");
+			if(c2m->block_count) {
+				c2m_string_append(c2m->main, "goto ");
+				// TODO: Repeated code in while
+				uint32_t add = c2m->goto_count;
+
+				c2m_string_append(c2m->main, "C2M_WHILE");
+				while(add) {
+					char lnum = '0' + (add % 10);
+					add /= 10;
+					char dest[2];
+					dest[0] = lnum;
+					dest[1] = '\0';
+					c2m_string_append(c2m->main, dest);
+				}
+				//
+				c2m_string_append(c2m->main, ";\n");
+				c2m->block_count--;
+			}else{
+				c2m->in_main = 0;
+			}
 		}else{
 			c2m_infunc(c2m, i, string, c2m->main);
 		}
@@ -540,6 +602,8 @@ void c2m_compile(c2m_t* c2m) {
 	c2m->libreq.sdl = 0;
 	c2m->libreq.sdl_window = 0;
 	c2m->libreq.sdl_audio = 0;
+	c2m->goto_count = 0;
+	c2m->block_count = 0;
 	for(int32_t i = 0; i < size;) {
 		c2m_loop(c2m, &i, filecontents);
 	}
