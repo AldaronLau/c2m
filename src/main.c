@@ -510,6 +510,9 @@ c2m_import(c2m_t* c2m, int32_t* i, const char* string, const char* mod,
 }
 
 void c2m_loop(c2m_t* c2m, int32_t* i, const char* string) {
+	if(c2m_expect(i, string, "//") == 0) {
+		while(string[*i] != '\n' && string[*i] != '\0') *i = *i + 1;
+	}
 	if(c2m->in_main) {
 		// Skip indentation.
 		c2m_skip_whitespace(i, string);

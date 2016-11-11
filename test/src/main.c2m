@@ -1,7 +1,7 @@
 main(list_t args) {
 	io.print("Start...")
 	io.println("Hello World = " + 190)
-	while {
-		io.println("I'm inside a while loop!")
-	}
+//	while {
+//		io.println("I'm inside a while loop!")
+//	}
 }
