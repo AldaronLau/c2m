@@ -76,6 +76,7 @@ typedef struct{
 	struct cl_array* main;
 	struct cl_array* functions;
 	struct cl_array* libfuncs;
+	struct cl_array* varnames;
 	uint8_t in_main;
 	uint8_t in_func;
 	uint8_t return_success;
@@ -183,7 +184,7 @@ c2m_process_value(int32_t* i, const char* string, char** dest, uint8_t* type) {
 					*dest = realloc(*dest,
 						len + strlen(dest2) + 1);
 					memcpy(*dest + len, dest2, strlen(dest2));
-				}				
+				}
 			}
 		}
 	}else if(c2m_expect(i, string, "TRUE") == 0) {
@@ -207,9 +208,15 @@ c2m_process_value(int32_t* i, const char* string, char** dest, uint8_t* type) {
 			c2m_abort("Not null after integer!");
 		}
 	}else{
-		printf("not proper at all %s\n", &string[*i]);
+		const char* what = &string[*i];
+		*dest = malloc(strlen(what) + 1);
+		memcpy(*dest, what, strlen(what) + 1);
+		*i = *i + strlen(what);
+		c2m_expect(i, string, "\n");
+//		(*dest)[0] = '0', (*dest)[strlen(what)] = 0;
+//		printf("not proper at all %s\n", &string[*i]);
 		// Not a proper declaration.
-		return 1;
+//		return 1;
 	}
 	return 0;
 }
@@ -402,6 +409,15 @@ void c2m_infunc(c2m_t* c2m, int32_t* i, const char* string, struct cl_array* a){
 			c2m_string_append(a, "}\n");
 		}
 	}else if(c2m_expect(i, string, "\n") == 0) {
+	}else if(c2m_expect(i, string, "int32_t") == 0) {
+		// check for C function call
+		uint32_t len = c2m_count(i, string, '\n');
+		char call[len + 1];
+
+		c2m_string_append(a, "int32_t");
+		c2m_read(i, string, call, len), call[len] = '\0';
+		c2m_string_append(a, call);
+		c2m_string_append(a, ";\n");
 	}else{
 		// check for C function call
 		uint32_t len = c2m_count(i, string, ';');
@@ -595,6 +611,7 @@ void c2m_compile(c2m_t* c2m) {
 	c2m->functions = c2m_string_create(NULL);
 	c2m->libfuncs = c2m_string_create(NULL);
 	c2m->main = c2m_string_create(NULL);
+	c2m->varnames = c2m_string_create(NULL);
 	c2m->in_main = 0;
 	c2m->in_func = 0;
 	c2m->return_success = 1;
@@ -635,6 +652,7 @@ void c2m_compile(c2m_t* c2m) {
 		current = current->next;
 	}
 	// Include requirements from C
+	c2m_output(output, "#include <stdint.h>\n"); // No matter what 32-64 compat
 	if(c2m->libreq.stdio) c2m_output(output, "#include <stdio.h>\n");
 	if(c2m->libreq.stdlib) c2m_output(output, "#include <stdlib.h>\n");
 	if(c2m->libreq.clump) c2m_output(output, "#include <c2m_clump.c>\n");

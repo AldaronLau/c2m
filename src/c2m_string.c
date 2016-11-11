@@ -17,3 +17,19 @@ static inline void c2m_string_append(struct cl_array *arr, const char* what) {
 static inline void c2m_string_destroy(struct cl_array *arr) {
 	cl_array_destroy(arr);
 }
+
+static inline void c2m_string_add_int(struct cl_array *arr, int64_t v) {
+	if(v < 0) {
+		char* value = cl_array_add(arr);
+		*value = '-';
+		v = -v;
+	}
+	while(v) {
+		char c = '\0';
+		char* value = cl_array_add(arr);
+		int8_t d = v % 10;
+
+		*value = '0' + d;
+		v /= 10;
+	}
+}

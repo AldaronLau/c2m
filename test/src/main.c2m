@@ -1,6 +1,10 @@
+// Example Program
+
 main(list_t args) {
+	int32_t v = 190
+
 	io.print("Start...")
-	io.println("Hello World = " + 190)
+	io.println("Hello World = " + v)
 //	while {
 //		io.println("I'm inside a while loop!")
 //	}
